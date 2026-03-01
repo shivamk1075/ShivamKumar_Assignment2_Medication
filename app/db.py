@@ -4,21 +4,20 @@ SQLite3 database operations for medication reconciliation.
 import os
 import json
 import sqlite3
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import (
-    PatientMedicationRecord,
-    MedicationSnapshot,
-    MedicationConflict,
+    createMedSnap,
+    createMedConf,
+    createPatMedRec,
 )
 
 
 class Database:
     """SQLite3 database operations."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path=None):
         """
         Initialize SQLite database connection.
         
@@ -38,10 +37,9 @@ class Database:
     
     def _setup_tables(self):
         """Set up tables and indexes."""
-        cursor = self.conn.cursor()
+        cur = self.conn.cursor()
         
-        # Create patients table
-        cursor.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS patients (
                 patient_id TEXT PRIMARY KEY,
                 clinic_id TEXT NOT NULL,
@@ -52,250 +50,234 @@ class Database:
             )
         """)
         
-        # Create indexes
-        cursor.execute("""
+        cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_clinic_id 
             ON patients(clinic_id)
         """)
         
-        cursor.execute("""
+        cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_clinic_updated 
             ON patients(clinic_id, updated_at)
         """)
         
         self.conn.commit()
     
-    def upsert_patient_record(
-        self, record: PatientMedicationRecord
-    ) -> str:
+    def upsertPatRec(self, rec):
         """
-        Upsert a patient medication record.
+        Upsert patient medication record (dict).
         
         Args:
-            record: PatientMedicationRecord to save.
+            rec: Patient record dict to save.
         
         Returns:
-            The patient_id.
+            The patId.
         """
-        record.updated_at = datetime.utcnow()
+        rec['updatAt'] = datetime.now(timezone.utc)
         
-        cursor = self.conn.cursor()
-        cursor.execute("""
+        cur = self.conn.cursor()
+        
+        snapsToSave = []
+        for s in rec['snaps']:
+            snapCopy = dict(s)
+            if isinstance(snapCopy.get('capturAt'), datetime):
+                snapCopy['capturAt'] = snapCopy['capturAt'].isoformat()
+            snapsToSave.append(snapCopy)
+        
+        confsToSave = []
+        for c in rec['confs']:
+            confCopy = dict(c)
+            if isinstance(confCopy.get('detectAt'), datetime):
+                confCopy['detectAt'] = confCopy['detectAt'].isoformat()
+            if isinstance(confCopy.get('resolveAt'), datetime):
+                confCopy['resolveAt'] = confCopy['resolveAt'].isoformat()
+            confsToSave.append(confCopy)
+        
+        creatAtStr = rec['creatAt'].isoformat() if isinstance(rec['creatAt'], datetime) else rec['creatAt']
+        updatAtStr = rec['updatAt'].isoformat() if isinstance(rec['updatAt'], datetime) else rec['updatAt']
+        
+        cur.execute("""
             INSERT OR REPLACE INTO patients
             (patient_id, clinic_id, snapshots_json, conflicts_json, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (
-            record.patient_id,
-            record.clinic_id,
-            json.dumps([s.model_dump(mode='json') for s in record.snapshots]),
-            json.dumps([c.model_dump(mode='json') for c in record.conflicts]),
-            record.created_at.isoformat(),
-            record.updated_at.isoformat(),
+            rec['patId'],
+            rec['clinId'],
+            json.dumps(snapsToSave),
+            json.dumps(confsToSave),
+            creatAtStr,
+            updatAtStr,
         ))
         
         self.conn.commit()
-        return record.patient_id
+        return rec['patId']
     
-    def get_patient_record(self, patient_id: str) -> Optional[PatientMedicationRecord]:
-        """Retrieve a patient's medication record."""
-        cursor = self.conn.cursor()
-        cursor.execute(
+    def getPatRec(self, patId):
+        """Retrieve patient medication record (returns dict)."""
+        cur = self.conn.cursor()
+        cur.execute(
             "SELECT * FROM patients WHERE patient_id = ?",
-            (patient_id,)
+            (patId,)
         )
-        row = cursor.fetchone()
+        row = cur.fetchone()
         
         if row:
-            snapshots_data = json.loads(row['snapshots_json'])
-            conflicts_data = json.loads(row['conflicts_json'])
+            snapsData = json.loads(row['snapshots_json'])
+            confsData = json.loads(row['conflicts_json'])
             
-            # Parse datetime strings in snapshots
-            for s in snapshots_data:
-                if isinstance(s['captured_at'], str):
-                    s['captured_at'] = datetime.fromisoformat(s['captured_at'])
+            for s in snapsData:
+                if isinstance(s.get('capturAt'), str):
+                    s['capturAt'] = datetime.fromisoformat(s['capturAt'])
             
-            # Parse datetime strings in conflicts
-            for c in conflicts_data:
-                if isinstance(c['detected_at'], str):
-                    c['detected_at'] = datetime.fromisoformat(c['detected_at'])
-                if c.get('resolved_at') and isinstance(c['resolved_at'], str):
-                    c['resolved_at'] = datetime.fromisoformat(c['resolved_at'])
+            for c in confsData:
+                if isinstance(c.get('detectAt'), str):
+                    c['detectAt'] = datetime.fromisoformat(c['detectAt'])
+                if c.get('resolveAt') and isinstance(c['resolveAt'], str):
+                    c['resolveAt'] = datetime.fromisoformat(c['resolveAt'])
             
-            snapshots = [MedicationSnapshot(**s) for s in snapshots_data]
-            conflicts = [MedicationConflict(**c) for c in conflicts_data]
+            creatAt = datetime.fromisoformat(row['created_at']) if isinstance(row['created_at'], str) else row['created_at']
+            updatAt = datetime.fromisoformat(row['updated_at']) if isinstance(row['updated_at'], str) else row['updated_at']
             
-            created_at = datetime.fromisoformat(row['created_at']) if isinstance(row['created_at'], str) else row['created_at']
-            updated_at = datetime.fromisoformat(row['updated_at']) if isinstance(row['updated_at'], str) else row['updated_at']
-            
-            return PatientMedicationRecord(
-                patient_id=row['patient_id'],
-                clinic_id=row['clinic_id'],
-                snapshots=snapshots,
-                conflicts=conflicts,
-                created_at=created_at,
-                updated_at=updated_at,
+            return createPatMedRec(
+                patId=row['patient_id'],
+                clinId=row['clinic_id'],
+                snaps=snapsData,
+                confs=confsData,
+                creatAt=creatAt,
+                updatAt=updatAt,
             )
         return None
     
-    def add_snapshot(
-        self, patient_id: str, snapshot: MedicationSnapshot
-    ) -> None:
-        """Add a medication snapshot to a patient's record."""
-        patient = self.get_patient_record(patient_id)
-        if patient:
-            patient.snapshots.append(snapshot)
-            patient.updated_at = datetime.utcnow()
-            self.upsert_patient_record(patient)
+    def addSnap(self, patId, snap):
+        """Add medication snapshot to patient record."""
+        pat = self.getPatRec(patId)
+        if pat:
+            pat['snaps'].append(snap)
+            pat['updatAt'] = datetime.now(timezone.utc)
+            self.upsertPatRec(pat)
     
-    def add_conflicts(
-        self, patient_id: str, conflicts: List[MedicationConflict]
-    ) -> None:
-        """Add detected conflicts to a patient's record."""
-        if not conflicts:
+    def addConf(self, patId, confs):
+        """Add detected conflicts to patient record."""
+        if not confs:
             return
         
-        patient = self.get_patient_record(patient_id)
-        if patient:
-            patient.conflicts.extend(conflicts)
-            patient.updated_at = datetime.utcnow()
-            self.upsert_patient_record(patient)
+        pat = self.getPatRec(patId)
+        if pat:
+            pat['confs'].extend(confs)
+            pat['updatAt'] = datetime.now(timezone.utc)
+            self.upsertPatRec(pat)
     
-    def resolve_conflict(
-        self,
-        patient_id: str,
-        conflict_index: int,
-        resolution_reason: str,
-        resolved_by: str,
-    ) -> None:
-        """Mark a conflict as resolved."""
-        patient = self.get_patient_record(patient_id)
-        if patient and 0 <= conflict_index < len(patient.conflicts):
-            conflict = patient.conflicts[conflict_index]
-            conflict.resolution_status = "resolved"
-            conflict.resolution_reason = resolution_reason
-            conflict.resolved_by = resolved_by
-            conflict.resolved_at = datetime.utcnow()
-            patient.updated_at = datetime.utcnow()
-            self.upsert_patient_record(patient)
+    def resolveConf(self, patId, confIdx, resoReason, resolveBy):
+        """Mark conflict as resolved."""
+        pat = self.getPatRec(patId)
+        if pat and 0 <= confIdx < len(pat['confs']):
+            conf = pat['confs'][confIdx]
+            conf['resoStatus'] = "resolved"
+            conf['resoReason'] = resoReason
+            conf['resolveBy'] = resolveBy
+            conf['resolveAt'] = datetime.now(timezone.utc)
+            pat['updatAt'] = datetime.now(timezone.utc)
+            self.upsertPatRec(pat)
     
-    def find_patients_with_unresolved_conflicts(
-        self,
-        clinic_id: Optional[str] = None,
-        min_conflicts: int = 1,
-    ) -> List[PatientMedicationRecord]:
+    def findPatUnresol(self, clinId=None, minConfs=1):
         """
         Find patients with unresolved conflicts.
         
         Args:
-            clinic_id: Filter by clinic (optional).
-            min_conflicts: Minimum number of unresolved conflicts.
+            clinId: Filter by clinic (optional).
+            minConfs: Minimum number of unresolved conflicts.
         
         Returns:
-            List of PatientMedicationRecord.
+            List of patient record dicts.
         """
-        cursor = self.conn.cursor()
+        cur = self.conn.cursor()
         
-        if clinic_id:
-            cursor.execute("SELECT * FROM patients WHERE clinic_id = ?", (clinic_id,))
+        if clinId:
+            cur.execute("SELECT * FROM patients WHERE clinic_id = ?", (clinId,))
         else:
-            cursor.execute("SELECT * FROM patients")
+            cur.execute("SELECT * FROM patients")
         
-        rows = cursor.fetchall()
+        rows = cur.fetchall()
         results = []
         
         for row in rows:
-            snapshots_data = json.loads(row['snapshots_json'])
-            conflicts_data = json.loads(row['conflicts_json'])
+            snapsData = json.loads(row['snapshots_json'])
+            confsData = json.loads(row['conflicts_json'])
             
-            # Parse datetime strings
-            for s in snapshots_data:
-                if isinstance(s['captured_at'], str):
-                    s['captured_at'] = datetime.fromisoformat(s['captured_at'])
+            for s in snapsData:
+                if isinstance(s.get('capturAt'), str):
+                    s['capturAt'] = datetime.fromisoformat(s['capturAt'])
             
-            for c in conflicts_data:
-                if isinstance(c['detected_at'], str):
-                    c['detected_at'] = datetime.fromisoformat(c['detected_at'])
-                if c.get('resolved_at') and isinstance(c['resolved_at'], str):
-                    c['resolved_at'] = datetime.fromisoformat(c['resolved_at'])
+            for c in confsData:
+                if isinstance(c.get('detectAt'), str):
+                    c['detectAt'] = datetime.fromisoformat(c['detectAt'])
+                if c.get('resolveAt') and isinstance(c['resolveAt'], str):
+                    c['resolveAt'] = datetime.fromisoformat(c['resolveAt'])
             
-            snapshots = [MedicationSnapshot(**s) for s in snapshots_data]
-            conflicts = [MedicationConflict(**c) for c in conflicts_data]
+            unresolved = [c for c in confsData if c.get('resoStatus') == "unresolved"]
             
-            # Filter to only unresolved conflicts
-            unresolved = [c for c in conflicts if c.resolution_status == "unresolved"]
-            
-            if len(unresolved) >= min_conflicts:
-                created_at = datetime.fromisoformat(row['created_at']) if isinstance(row['created_at'], str) else row['created_at']
-                updated_at = datetime.fromisoformat(row['updated_at']) if isinstance(row['updated_at'], str) else row['updated_at']
+            if len(unresolved) >= minConfs:
+                creatAt = datetime.fromisoformat(row['created_at']) if isinstance(row['created_at'], str) else row['created_at']
+                updatAt = datetime.fromisoformat(row['updated_at']) if isinstance(row['updated_at'], str) else row['updated_at']
                 
-                record = PatientMedicationRecord(
-                    patient_id=row['patient_id'],
-                    clinic_id=row['clinic_id'],
-                    snapshots=snapshots,
-                    conflicts=unresolved,
-                    created_at=created_at,
-                    updated_at=updated_at,
+                rec = createPatMedRec(
+                    patId=row['patient_id'],
+                    clinId=row['clinic_id'],
+                    snaps=snapsData,
+                    confs=unresolved,
+                    creatAt=creatAt,
+                    updatAt=updatAt,
                 )
-                results.append(record)
+                results.append(rec)
         
         return results
     
-    def get_conflict_summary(
-        self,
-        clinic_id: Optional[str] = None,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+    def getConfSummary(self, clinId=None, startDate=None, endDate=None):
         """
         Get aggregated conflict statistics.
         
         Args:
-            clinic_id: Optional clinic filter.
-            start_date: Optional start date for detected_at.
-            end_date: Optional end date for detected_at.
+            clinId: Optional clinic filter.
+            startDate: Optional start date for detectAt.
+            endDate: Optional end date for detectAt.
         
         Returns:
             Dictionary with summary statistics.
         """
-        cursor = self.conn.cursor()
+        cur = self.conn.cursor()
         
-        # Get all patients
-        if clinic_id:
-            cursor.execute("SELECT * FROM patients WHERE clinic_id = ?", (clinic_id,))
+        if clinId:
+            cur.execute("SELECT * FROM patients WHERE clinic_id = ?", (clinId,))
         else:
-            cursor.execute("SELECT * FROM patients")
+            cur.execute("SELECT * FROM patients")
         
-        rows = cursor.fetchall()
+        rows = cur.fetchall()
         
-        total_patients = len(rows)
-        conflict_stats = {}
+        totalPats = len(rows)
+        confStats = {}
         
         for row in rows:
-            conflicts_data = json.loads(row['conflicts_json'])
+            confsData = json.loads(row['conflicts_json'])
             
-            # Parse datetime strings
-            for c in conflicts_data:
-                if isinstance(c['detected_at'], str):
-                    c['detected_at'] = datetime.fromisoformat(c['detected_at'])
-                if c.get('resolved_at') and isinstance(c['resolved_at'], str):
-                    c['resolved_at'] = datetime.fromisoformat(c['resolved_at'])
+            for c in confsData:
+                if isinstance(c.get('detectAt'), str):
+                    c['detectAt'] = datetime.fromisoformat(c['detectAt'])
+                if c.get('resolveAt') and isinstance(c['resolveAt'], str):
+                    c['resolveAt'] = datetime.fromisoformat(c['resolveAt'])
             
-            conflicts = [MedicationConflict(**c) for c in conflicts_data]
-            
-            for conflict in conflicts:
-                conflict_type = conflict.conflict_type
+            for conf in confsData:
+                confType = conf.get('confType')
                 
-                if conflict_type not in conflict_stats:
-                    conflict_stats[conflict_type] = {"count": 0, "unresolved": 0}
+                if confType not in confStats:
+                    confStats[confType] = {"count": 0, "unresolved": 0}
                 
-                conflict_stats[conflict_type]["count"] += 1
-                if conflict.resolution_status == "unresolved":
-                    conflict_stats[conflict_type]["unresolved"] += 1
+                confStats[confType]["count"] += 1
+                if conf.get('resoStatus') == "unresolved":
+                    confStats[confType]["unresolved"] += 1
         
         return {
-            "total_patients": total_patients,
-            "conflict_statistics": [
-                {"_id": k, **v} for k, v in conflict_stats.items()
+            "totalPats": totalPats,
+            "confStats": [
+                {"_id": k, **v} for k, v in confStats.items()
             ]
         }
     

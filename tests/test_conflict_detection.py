@@ -2,15 +2,19 @@
 Comprehensive tests for medication reconciliation service.
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from app.models import (
-    MedicationItem,
-    MedicationSnapshot,
-    MedicationSource,
-    ConflictType,
-    ResolutionStatus,
+    createMedItem,
+    createMedSnap,
+    CLINIC_EMR,
+    HOSPITAL_DISCHARGE,
+    PATIENT_REPORTED,
+    DOSE_MISMATCH,
+    BLACKLISTED_COMBINATION,
+    MISSING_STOPPED,
+    UNRESOLVED,
 )
-from app.conflict_detector import ConflictDetector
+from app.conflDetect import ConflictDetector
 
 
 @pytest.fixture
@@ -24,128 +28,124 @@ class TestConflictDetection:
 
     def test_detect_dose_mismatch(self, detector):
         """Test detection of dose mismatches for the same drug."""
-        # Setup: same drug with different doses from two sources
-        snapshot1 = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="lisinopril", dose=10, unit="mg", frequency="daily"),
+        snap1 = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="lisinopril", dose=10, unit="mg", freq="daily"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        snapshot2 = MedicationSnapshot(
-            source=MedicationSource.HOSPITAL_DISCHARGE,
-            medications=[
-                MedicationItem(name="Lisinopril", dose=20, unit="mg", frequency="daily"),
+        snap2 = createMedSnap(
+            src=HOSPITAL_DISCHARGE,
+            meds=[
+                createMedItem(name="Lisinopril", dose=20, unit="mg", freq="daily"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_dose_mismatches([snapshot1, snapshot2])
+        confs = detector.detectDoseMismatches([snap1, snap2])
         
-        assert len(conflicts) == 1
-        assert conflicts[0].conflict_type == ConflictType.DOSE_MISMATCH
-        assert conflicts[0].severity == "high"
+        assert len(confs) == 1
+        assert confs[0].get('confType') == DOSE_MISMATCH
+        assert confs[0].get('severity') == "high"
 
     def test_no_conflict_same_dose(self, detector):
         """Test that no conflict is raised when doses match."""
-        snapshot1 = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="metoprolol", dose=100, unit="mg", frequency="daily"),
+        snap1 = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="metoprolol", dose=100, unit="mg", freq="daily"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        snapshot2 = MedicationSnapshot(
-            source=MedicationSource.HOSPITAL_DISCHARGE,
-            medications=[
-                MedicationItem(name="Metoprolol", dose=100, unit="mg", frequency="daily"),
+        snap2 = createMedSnap(
+            src=HOSPITAL_DISCHARGE,
+            meds=[
+                createMedItem(name="Metoprolol", dose=100, unit="mg", freq="daily"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_dose_mismatches([snapshot1, snapshot2])
+        confs = detector.detectDoseMismatches([snap1, snap2])
         
-        assert len(conflicts) == 0
+        assert len(confs) == 0
 
     def test_detect_blacklisted_combination(self, detector):
         """Test detection of blacklisted drug combinations."""
-        # ACE_INHIBITOR + ARB is blacklisted
-        snapshot = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="lisinopril", dose=10, unit="mg"),
-                MedicationItem(name="losartan", dose=50, unit="mg"),
+        snap = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="lisinopril", dose=10, unit="mg"),
+                createMedItem(name="losartan", dose=50, unit="mg"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_blacklisted_combinations([snapshot])
+        confs = detector.detectBlacklistedComb([snap])
         
-        assert len(conflicts) == 1
-        assert conflicts[0].conflict_type == ConflictType.BLACKLISTED_COMBINATION
-        assert conflicts[0].severity == "critical"
+        assert len(confs) == 1
+        assert confs[0].get('confType') == BLACKLISTED_COMBINATION
+        assert confs[0].get('severity') == "critical"
 
     def test_detect_missing_or_stopped(self, detector):
         """Test detection of medication present in one source but stopped in another."""
-        snapshot1 = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="amlodipine", dose=5, unit="mg"),
+        snap1 = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="amlodipine", dose=5, unit="mg"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        snapshot2 = MedicationSnapshot(
-            source=MedicationSource.HOSPITAL_DISCHARGE,
-            medications=[
-                MedicationItem(name="amlodipine", dose=5, unit="mg", stopped=True),
+        snap2 = createMedSnap(
+            src=HOSPITAL_DISCHARGE,
+            meds=[
+                createMedItem(name="amlodipine", dose=5, unit="mg", stopped=True),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_missing_or_stopped([snapshot1, snapshot2])
+        confs = detector.detectMissingStopped([snap1, snap2])
         
-        assert len(conflicts) == 1
-        assert conflicts[0].conflict_type == ConflictType.MISSING_STOPPED
-        assert conflicts[0].severity == "high"
+        assert len(confs) == 1
+        assert confs[0].get('confType') == MISSING_STOPPED
+        assert confs[0].get('severity') == "high"
 
     def test_normalize_medication_name(self, detector):
         """Test medication name normalization."""
-        assert detector.normalize_medication_name("LiSinOpril") == "lisinopril"
-        assert detector.normalize_medication_name("  ibuprofen  ") == "ibuprofen"
-        assert detector.normalize_medication_name("METOPROLOL") == "metoprolol"
+        assert detector.normMedName("LiSinOpril") == "lisinopril"
+        assert detector.normMedName("  ibuprofen  ") == "ibuprofen"
+        assert detector.normMedName("METOPROLOL") == "metoprolol"
 
     def test_detect_all_conflicts_integration(self, detector):
         """Integration test for detecting all conflict types."""
-        snapshots = [
-            MedicationSnapshot(
-                source=MedicationSource.CLINIC_EMR,
-                medications=[
-                    MedicationItem(name="lisinopril", dose=10, unit="mg"),
-                    MedicationItem(name="metoprolol", dose=100, unit="mg"),
+        snaps = [
+            createMedSnap(
+                src=CLINIC_EMR,
+                meds=[
+                    createMedItem(name="lisinopril", dose=10, unit="mg"),
+                    createMedItem(name="metoprolol", dose=100, unit="mg"),
                 ],
-                captured_at=datetime.utcnow(),
+                capturAt=datetime.now(timezone.utc),
             ),
-            MedicationSnapshot(
-                source=MedicationSource.HOSPITAL_DISCHARGE,
-                medications=[
-                    MedicationItem(name="lisinopril", dose=20, unit="mg"),  # dose mismatch
-                    MedicationItem(name="losartan", dose=50, unit="mg"),    # blacklist with ACE
+            createMedSnap(
+                src=HOSPITAL_DISCHARGE,
+                meds=[
+                    createMedItem(name="lisinopril", dose=20, unit="mg"),
+                    createMedItem(name="losartan", dose=50, unit="mg"),
                 ],
-                captured_at=datetime.utcnow(),
+                capturAt=datetime.now(timezone.utc),
             ),
         ]
         
-        all_conflicts = detector.detect_all_conflicts(snapshots)
+        allConfs = detector.detectAllConf(snaps)
         
-        # Should detect dose mismatch and blacklisted combination
-        assert len(all_conflicts) >= 1  # At least dose mismatch or blacklist conflict
+        assert len(allConfs) >= 1
         
-        # Check for expected types
-        conflict_types = {c.conflict_type for c in all_conflicts}
-        assert ConflictType.DOSE_MISMATCH in conflict_types or ConflictType.BLACKLISTED_COMBINATION in conflict_types
+        confTypes = {c.get('confType') for c in allConfs}
+        assert DOSE_MISMATCH in confTypes or BLACKLISTED_COMBINATION in confTypes
 
 
 class TestMedicationNormalization:
@@ -153,15 +153,15 @@ class TestMedicationNormalization:
 
     def test_normalize_medication_with_various_cases(self, detector):
         """Test that medication normalization handles various input cases."""
-        test_cases = [
+        testCases = [
             ("LISINOPRIL", "lisinopril"),
             ("Metoprolol", "metoprolol"),
             ("aMLodiPinE", "amlodipine"),
             ("  ibuprofen  ", "ibuprofen"),
         ]
         
-        for input_name, expected in test_cases:
-            assert detector.normalize_medication_name(input_name) == expected
+        for inName, expected in testCases:
+            assert detector.normMedName(inName) == expected
 
 
 class TestEdgeCases:
@@ -169,72 +169,69 @@ class TestEdgeCases:
 
     def test_empty_snapshots(self, detector):
         """Test handling of empty snapshots."""
-        conflicts = detector.detect_all_conflicts([])
-        assert conflicts == []
+        confs = detector.detectAllConf([])
+        assert confs == []
 
     def test_snapshot_with_no_medications(self, detector):
         """Test handling of snapshots with no medications."""
-        snapshot = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[],
-            captured_at=datetime.utcnow(),
+        snap = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[],
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_all_conflicts([snapshot])
-        assert conflicts == []
+        confs = detector.detectAllConf([snap])
+        assert confs == []
 
     def test_medication_without_dose(self, detector):
         """Test handling of medications without dose information."""
-        snapshot = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="lisinopril"),  # No dose
+        snap = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="lisinopril"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        # Should not raise error
-        conflicts = detector.detect_dose_mismatches([snapshot])
-        assert conflicts == []
+        confs = detector.detectDoseMismatches([snap])
+        assert confs == []
 
     def test_stopped_medication_ignored_in_dose_check(self, detector):
         """Test that stopped medications are ignored in dose mismatch detection."""
-        snapshot1 = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="lisinopril", dose=10, unit="mg"),
+        snap1 = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="lisinopril", dose=10, unit="mg"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        snapshot2 = MedicationSnapshot(
-            source=MedicationSource.HOSPITAL_DISCHARGE,
-            medications=[
-                MedicationItem(name="lisinopril", dose=20, unit="mg", stopped=True),
+        snap2 = createMedSnap(
+            src=HOSPITAL_DISCHARGE,
+            meds=[
+                createMedItem(name="lisinopril", dose=20, unit="mg", stopped=True),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        conflicts = detector.detect_dose_mismatches([snapshot1, snapshot2])
+        confs = detector.detectDoseMismatches([snap1, snap2])
         
-        # Should not flag as dose mismatch since stopped meds are ignored
-        assert len(conflicts) == 0
+        assert len(confs) == 0
 
     def test_single_source_no_conflict(self, detector):
         """Test that conflicts requiring multiple sources are not flagged for single source."""
-        snapshot = MedicationSnapshot(
-            source=MedicationSource.CLINIC_EMR,
-            medications=[
-                MedicationItem(name="lisinopril", dose=10, unit="mg"),
-                MedicationItem(name="losartan", dose=50, unit="mg"),  # Blacklist combo
+        snap = createMedSnap(
+            src=CLINIC_EMR,
+            meds=[
+                createMedItem(name="lisinopril", dose=10, unit="mg"),
+                createMedItem(name="losartan", dose=50, unit="mg"),
             ],
-            captured_at=datetime.utcnow(),
+            capturAt=datetime.now(timezone.utc),
         )
         
-        # Blacklist combos should still be detected within a single source
-        conflicts = detector.detect_blacklisted_combinations([snapshot])
-        assert len(conflicts) == 1
-        assert conflicts[0].sources_involved == [MedicationSource.CLINIC_EMR]
+        confs = detector.detectBlacklistedComb([snap])
+        assert len(confs) == 1
+        assert CLINIC_EMR in confs[0].get('srcsInvolv', [])
 
 
 if __name__ == "__main__":
