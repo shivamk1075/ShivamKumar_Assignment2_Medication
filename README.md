@@ -2,27 +2,27 @@
 
 ## SWE Internship — Take Home Assignment Submission
 
-This project implements a backend service that ingests medication lists from multiple sources, maintains patient medication history, and detects clinically relevant conflicts such as dose mismatches, blacklisted drug combinations, and missing/stopped medications.
+This project implements a backend service that ingests medication lists from different sources, maintains patient medication history, and detects conflicts such as dose mismatches, unsafe drug combinations, and missing or stopped medications.
 
-The focus of this assignment was **clear system design, readable code, and well-reasoned tradeoffs** rather than building a production-scale system.
-
----
-
-# ⏱ Expected Time Window
-
-**Time spent:** ~6–10 hours (time-boxed as instructed)
-
-If anything appears incomplete, it was intentionally scoped to stay within the assignment constraints.
+The goal of this assignment was to demonstrate clear system design, readable code, and well-reasoned tradeoffs within a limited time window rather than building a production-scale system.
 
 ---
 
-# 🚀 Quick Setup (Run in under 5 minutes)
+## Time Spent
 
-## Requirements
+Approximately 6–10 hours (time-boxed as instructed).
+
+Some parts are intentionally simple to stay within the assignment scope.
+
+---
+
+## Quick Setup (Run in under 5 minutes)
+
+### Requirements
 - Python 3.9+
 - Git
 
-## Steps
+### Steps
 
 ```bash
 # Clone repository
@@ -43,179 +43,125 @@ pytest tests/ -v
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-Visit:
+Open:
 
 ```
 http://localhost:8001/docs
 ```
 
-for interactive API documentation.
+to view API documentation.
 
 ---
 
-# 🎯 Problem Overview
+## Problem Overview
 
-Dialysis patients often receive medications from multiple sources:
+Dialysis patients may receive medication prescriptions from multiple sources such as clinic records, hospital discharge notes, or patient self reports. This can lead to inconsistencies like:
 
-- Clinic EMR
-- Hospital discharge notes
-- Patient self reports
+- Same medication with different doses
+- Unsafe drug combinations
+- Medication missing or stopped in one source
 
-This creates inconsistencies like:
-
-- Same drug with different doses
-- Dangerous drug combinations
-- Medications missing or stopped in one source
-
-This service:
-
-- Stores medication snapshots
-- Detects conflicts automatically
-- Tracks unresolved conflicts
-- Allows conflict resolution
+This service stores medication snapshots, detects conflicts, and tracks unresolved issues.
 
 ---
 
-# 🏗 Architecture Overview
+## Architecture Overview
 
-The system follows a simple request → processing → storage flow.
+The system follows a simple flow:
 
 ```
-Client Request
-      ↓
-FastAPI Endpoint
-      ↓
-Conflict Detection Engine
-      ↓
-SQLite Database
-      ↓
-Response / Reports
+Client Request → FastAPI → Conflict Detection → SQLite Database → Response
 ```
 
-## Components
+### Main Components
 
-### `app/main.py`
-- FastAPI endpoints
-- Request handling
-- Validation and orchestration
+- **app/main.py**  
+  API endpoints and request handling.
 
-### `app/conflDetect.py`
-- Core business logic
-- Detects:
-  - Dose mismatch
-  - Blacklisted drug combinations
-  - Missing/stopped medication
+- **app/conflDetect.py**  
+  Core business logic for conflict detection.
 
-### `app/db.py`
-- SQLite persistence layer
-- Stores patient snapshots and conflicts
+- **app/db.py**  
+  SQLite database operations.
 
-### `app/models.py`
-- Data structure helpers (dictionary factories)
+- **app/models.py**  
+  Data structure helpers.
 
-### `data/conflict_rules.json`
-- Static conflict rules and drug classes
+- **data/conflict_rules.json**  
+  Static rules for drug conflicts.
 
-### `tests/`
-- Unit tests for core conflict detection logic
+- **tests/**  
+  Unit tests for conflict detection.
+
+The goal was to keep the architecture simple and easy to understand.
 
 ---
 
-# 🧠 System Design Decisions (Why things were chosen)
+## Design Decisions
 
-## SQLite instead of MongoDB
-Originally MongoDB was considered, but SQLite was chosen because:
+### SQLite instead of MongoDB
+SQLite was chosen because:
 
-- Zero external setup required
+- No external setup required
 - Easy for reviewers to run locally
 - Sufficient for assignment scale
-- Faster development in a time-boxed task
-- Keeps project self-contained
+- Faster to implement within limited time
 
-This was a deliberate tradeoff prioritizing simplicity over scalability.
-
----
-
-## Simple Rule Engine using JSON
-Conflict rules are stored in a static JSON file.
-
-Reasons:
-
-- Easy to review
-- Deterministic behavior
-- No dependency on external APIs
-- Faster implementation for assignment scope
-
-A production system would integrate medical standards like RxNorm.
+The focus was simplicity and reproducibility rather than scalability.
 
 ---
 
-## Plain Python Data Models (not heavy frameworks)
-Simple dictionary factories were used instead of complex modeling libraries.
-
-Reasons:
-
-- Reduced boilerplate
-- Faster development
-- Easier to test core logic
-- Keeps focus on business rules
+### Simple Rule Engine
+Conflict rules are stored in a JSON file to keep behavior deterministic and easy to review.  
+A production system would use standard medical databases like RxNorm.
 
 ---
 
-## Snapshot Based Storage
-Each ingestion creates a new snapshot rather than modifying previous data.
-
-Reasons:
-
-- Preserves history
-- Simplifies reconciliation logic
-- Easier debugging
+### Simple Data Models
+Plain Python dictionaries were used instead of complex modeling frameworks to reduce boilerplate and focus on core logic.
 
 ---
 
-## Synchronous Conflict Detection
-Conflicts are detected immediately during ingestion.
-
-Reason:
-- Simpler architecture for assignment scope.
-
-Production systems may use background jobs.
+### Snapshot-based Storage
+Each ingestion creates a new snapshot instead of modifying existing data.  
+This preserves history and simplifies reconciliation.
 
 ---
 
-# 📌 Assumptions
+### Synchronous Conflict Detection
+Conflicts are detected during ingestion to keep the architecture straightforward.
 
-- Single clinic per patient.
-- Medication names normalized using simple string comparison.
+---
+
+## Assumptions
+
+- Each patient belongs to a single clinic.
+- Medication names are compared using simple normalization.
 - Snapshots are append-only.
-- Small dataset (assignment scale).
-- No concurrent write conflicts.
+- Dataset size is small.
+- No concurrent write handling.
 
 ---
 
-# ⚖ Tradeoffs
+## Tradeoffs
 
-| Choice | Benefit | Limitation |
-|---|---|---|
-| SQLite | Simple, serverless | Not horizontally scalable |
-| Static rules | Deterministic | Limited medical coverage |
-| Denormalized storage | Easy implementation | Larger record size |
-| No RxNorm mapping | Faster build | Drug alias issues |
+- SQLite is simple but not highly scalable.
+- Static rules are limited in coverage.
+- No medical terminology mapping.
+- Data is stored in a denormalized format for simplicity.
 
 ---
 
-# 🧪 Tests
+## Tests
 
-Tests focus on **core domain behavior** rather than framework code.
-
-## Covered cases
+Tests focus on core business logic:
 
 - Dose mismatch detection
 - Blacklisted drug combinations
-- Missing/stopped medication
-- Edge cases (empty data, normalization)
+- Missing or stopped medications
+- Edge cases
 
-Run:
+Run tests using:
 
 ```bash
 pytest tests/ -v
@@ -223,107 +169,58 @@ pytest tests/ -v
 
 ---
 
-# 📊 API Overview
+## API Endpoints
 
-## POST `/ingest`
-Ingest medication snapshot and detect conflicts.
-
-## GET `/patients/{patId}`
-Fetch patient summary and unresolved conflicts.
-
-## POST `/conflicts/{patId}/{confIdx}/resolve`
-Resolve a conflict with reason and audit info.
-
-## GET `/health`
-Service health check.
+- **POST /ingest** — ingest medication snapshot and detect conflicts  
+- **GET /patients/{patId}** — fetch patient summary  
+- **POST /conflicts/{patId}/{confIdx}/resolve** — resolve a conflict  
+- **GET /health** — service health check
 
 ---
 
-# 📦 Seed Data
+## Known Limitations
 
-A synthetic dataset generator was planned for quick demo data.
-
-If not present, tests still demonstrate core functionality.
-
----
-
-# ❗ Known Limitations
-
-- No medical terminology mapping (RxNorm).
-- No authentication or authorization.
-- No audit event log (mutates conflicts directly).
+- No drug alias mapping or medical terminology integration.
 - Basic validation only.
+- No authentication or authorization.
+- No audit event log.
 - SQLite not suitable for large production workloads.
-- Limited reporting endpoints.
 
 ---
 
-# 🔮 What I Would Build Next (With More Time)
+## Future Improvements
 
-- RxNorm drug mapping
-- Strong request validation models
-- PostgreSQL or MongoDB backend
-- Event sourcing / audit logs
+With more time, I would add:
+
+- Drug name standardization using medical databases
+- Strong request validation
+- Scalable database support
 - Background conflict detection
-- Authentication and permissions
+- Audit logging
 - UI dashboard
-- Better reporting analytics
 
 ---
 
-# 🤖 AI Usage Disclosure
+## AI Usage Disclosure
 
-AI was used as a development assistant, not as a replacement for reasoning.
+AI tools were used as development assistance.
 
-## Used AI for
-- Improving code comments
-- README drafting and formatting
-- Architecture brainstorming
-- Minor debugging assistance
+### Used AI for
+- Adding comments and improving readability
+- Drafting documentation
+- Brainstorming design ideas
 
-## Reviewed manually
-- All business logic
+### Reviewed manually
+- Core business logic
 - Database design
-- Conflict detection rules
-- Tests and system flow
+- System architecture
+- Tests
 
-## Example where I disagreed with AI
-AI suggested using MongoDB initially.  
-I chose SQLite instead because:
-
-- Easier setup for reviewers
-- No external infrastructure
-- Sufficient for assignment scope
-- Faster development
+### Example of disagreement
+AI suggested using MongoDB initially. I chose SQLite instead because it required less setup, was easier for reviewers to run, and was sufficient for this assignment.
 
 ---
 
-# ✅ How This Meets Evaluation Criteria
+## Final Notes
 
-### Modeling
-Clear domain entities: Patient, Snapshot, Conflict.
-
-### Architecture
-Separated API, business logic, and storage layers.
-
-### Robustness
-Handles missing values, normalization, and edge cases.
-
-### Code Readability
-Simple naming, minimal abstraction, focused logic.
-
-### Communication
-This README documents decisions and tradeoffs clearly.
-
----
-
-# 👨‍💻 Final Notes
-
-The goal of this submission was to demonstrate:
-
-- Clear thinking
-- Practical system design
-- Tradeoff awareness
-- Maintainable code
-
-Rather than maximizing features, the focus was on building a small but complete, understandable system.
+The focus of this submission was to demonstrate clear thinking, practical system design, and maintainable code within a limited time window.
