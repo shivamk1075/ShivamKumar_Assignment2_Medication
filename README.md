@@ -8,6 +8,72 @@ The goal of this assignment was to demonstrate clear system design, readable cod
 
 ---
 
+## Assumptions (Defined Before Implementation)
+
+Before starting implementation, I made the following assumptions to keep scope manageable:
+
+- Each patient belongs to a single clinic.
+- Medication names are compared using simple normalization (lowercase string matching).
+- Snapshots are append-only and not modified after creation.
+- Dataset size is small (assignment scale).
+- No concurrent write handling is required.
+- Conflict detection runs during ingestion rather than asynchronously.
+
+These assumptions helped reduce complexity and allowed focus on core reconciliation logic.
+
+---
+
+## Design Choices and AI Usage
+
+AI tools were used for assistance (comments, documentation drafting, and brainstorming ideas), but all design decisions were reviewed manually. In several cases I chose simpler alternatives than what AI initially suggested.
+
+### SQLite instead of MongoDB (AI suggested MongoDB)
+I chose SQLite because:
+
+- No external setup required
+- Easier for reviewers to run locally
+- Sufficient for assignment scale
+- Faster implementation in a time-boxed task
+- Keeps the project self-contained
+
+This prioritizes reproducibility over scalability.
+
+---
+
+### Static JSON Rule Engine
+AI suggested more complex or dynamic approaches, but I chose static JSON rules because:
+
+- Deterministic behavior
+- Easy to review
+- No external dependencies
+- Faster implementation
+
+A production system would integrate medical databases like RxNorm.
+
+---
+
+### Simple Python Data Models
+Instead of heavier modeling frameworks, I used simple dictionary-based models because:
+
+- Less boilerplate
+- Faster development
+- Easier testing
+- Keeps focus on business logic
+
+---
+
+### Snapshot-Based Storage
+Each ingestion creates a new snapshot rather than modifying previous data.  
+This preserves history and simplifies reconciliation logic.
+
+---
+
+### Synchronous Conflict Detection
+Conflicts are detected immediately during ingestion to keep the system straightforward.  
+AI suggested more complex background processing, but synchronous detection was sufficient for this assignment.
+
+---
+
 ## Quick Setup
 
 ### Requirements
@@ -67,80 +133,23 @@ Client Request → FastAPI → Conflict Detection → SQLite Database → Respon
 
 ### Main Components
 
-- **app/main.py**  
-  API endpoints and request handling.
+- **app/main.py** — API endpoints and request handling  
+- **app/conflDetect.py** — conflict detection logic  
+- **app/db.py** — SQLite database operations  
+- **app/models.py** — data structure helpers  
+- **data/conflict_rules.json** — static conflict rules  
+- **tests/** — unit tests for core logic  
 
-- **app/conflDetect.py**  
-  Core business logic for conflict detection.
-
-- **app/db.py**  
-  SQLite database operations.
-
-- **app/models.py**  
-  Data structure helpers.
-
-- **data/conflict_rules.json**  
-  Static rules for drug conflicts.
-
-- **tests/**  
-  Unit tests for conflict detection.
-
-The goal was to keep the architecture simple and easy to understand.
-
----
-
-## Design Decisions
-
-### SQLite instead of MongoDB
-SQLite was chosen because:
-
-- No external setup required
-- Easy for reviewers to run locally
-- Sufficient for assignment scale
-- Faster to implement within limited time
-
-The focus was simplicity and reproducibility rather than scalability.
-
----
-
-### Simple Rule Engine
-Conflict rules are stored in a JSON file to keep behavior deterministic and easy to review.  
-A production system would use standard medical databases like RxNorm.
-
----
-
-### Simple Data Models
-Plain Python dictionaries were used instead of complex modeling frameworks to reduce boilerplate and focus on core logic.
-
----
-
-### Snapshot-based Storage
-Each ingestion creates a new snapshot instead of modifying existing data.  
-This preserves history and simplifies reconciliation.
-
----
-
-### Synchronous Conflict Detection
-Conflicts are detected during ingestion to keep the architecture straightforward.
-
----
-
-## Assumptions
-
-- Each patient belongs to a single clinic.
-- Medication names are compared using simple normalization.
-- Snapshots are append-only.
-- Dataset size is small.
-- No concurrent write handling.
+The architecture is intentionally simple and easy to follow.
 
 ---
 
 ## Tradeoffs
 
 - SQLite is simple but not highly scalable.
-- Static rules are limited in coverage.
-- No medical terminology mapping.
-- Data is stored in a denormalized format for simplicity.
+- Static rules provide limited medical coverage.
+- No drug alias or terminology mapping.
+- Denormalized storage simplifies implementation but increases record size.
 
 ---
 
@@ -193,26 +202,13 @@ With more time, I would add:
 
 ---
 
-## AI Usage Disclosure
+## Extension Request
 
-AI tools were used as development assistance.
-
-### Used AI for
-- Adding comments and improving readability
-- Drafting documentation
-- Brainstorming design ideas
-
-### Reviewed manually
-- Core business logic
-- Database design
-- System architecture
-- Tests
-
-### Example of disagreement
-AI suggested using MongoDB initially. I chose SQLite instead because it required less setup, was easier for reviewers to run, and was sufficient for this assignment.
+Due to technical issues with my laptop today, I request permission to submit the demo video link by **tomorrow 12:00 noon**.  
+The implementation is complete and working — only the recording is pending.
 
 ---
 
 ## Final Notes
 
-The focus of this submission was to demonstrate clear thinking, practical system design, and maintainable code within a limited time window.
+The focus of this submission was to demonstrate clear thinking, practical system design, and maintainable code within a limited time window. The implementation prioritizes clarity and reasoning over feature completeness.
