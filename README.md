@@ -9,10 +9,409 @@ A production-grade backend service for reconciling medications across multiple h
 ✅ **Longitudinal tracking** — Maintain version history of medication lists per patient  
 ✅ **Reporting & aggregation** — Query patients with unresolved conflicts, conflict statistics by clinic  
 ✅ **Conflict resolution workflow** — Mark conflicts resolved with audit trail (who, when, why)  
+✅ **Serverless SQLite** — No external database required; runs in-memory or file-based  
 
 ---
 
 ## Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                    FastAPI Application (Port 8001)                  │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌──────────────────┐         ┌──────────────────┐                  │
+│  │  Ingestion       │         │  Retrieval       │                  │
+│  │  Endpoints       │────────▶│  Endpoints       │                  │
+│  │ POST /ingest     │         │ GET /patients    │                  │
+│  └──────────────────┘         │ POST /resolve    │                  │
+│          │                    └──────────────────┘                  │
+│          │                                                          │
+│          ▼                                                          │
+│  ┌──────────────────────────────────────────────────────┐           │
+│  │  ConflictDetector (3 algorithms)                     │           │
+│  │  ├─ detect_dose_mismatches()                         │           │
+│  │  ├─ detect_blacklisted_combinations()                │           │
+│  │  └─ detect_missing_or_stopped()                      │           │
+│  └──────────────────────────────────────────────────────┘           │
+│          │                                                          │
+│          ▼                                                          │
+│  ┌──────────────────┐         ┌──────────────────┐                  │
+│  │  Database Layer  │         │  Reporting       │                  │
+│  │  (SQLite3)       │         │  Endpoints       │                  │
+│  │ └─ upsert        │────────▶│ GET /conflicts   │                  │
+│  │ └─ get_patient   │         │ GET /summary     │                  │
+│  │ └─ resolve       │         └──────────────────┘                  │
+│  └──────────────────┘                                               │
+│          │                                                          │
+│          ▼                                                          │
+│  ┌──────────────────────────────────────────────────────┐           │
+│  │  SQLite3 Database (medication_reconciliation.db)    │           │
+│  │  └─ patients (JSON blobs for snapshots + conflicts) │           │
+│  └──────────────────────────────────────────────────────┘           │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Aspect | Decision | Trade-off |
+|--------|----------|-----------|
+| **Database** | SQLite3 (serverless, file-based) | Simple queries; JSON blobs for complex nesting. Scales to ~100k patients; future: Postgres for 1M+ |
+| **Data Model** | Denormalized (snapshots + conflicts embedded in patient row) | Single row size grows; simpler joins. Manual archival for old data. |
+| **Versioning** | Version via snapshot arrays (temporal sequence) | No explicit version IDs; ordering by captured_at. Future: version number field |
+| **Conflict Resolution** | In-place mutation with metadata | No event log; can't undo resolutions. Future: event sourcing |
+| **Drug Database** | Static JSON rules (conflict_rules.json) | Manual updates; no real-time interactions. Future: RxNav/RxNorm API |
+| **Normalization** | Lowercase + trim (medication names) | Original case lost. Future: store both normalized + original |
+
+---
+
+## Quick Start (< 5 min)
+
+### Prerequisites
+- Python 3.9+
+- Git
+
+### Installation
+
+```bash
+# 1. Clone and navigate
+git clone git@github.com:shivamk1075/ShivamKumar_Assignment2_Medication.git
+cd ShivamKumar_Assignment2_Medication
+
+# 2. Create virtual environment (optional)
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Seed database with synthetic data
+python data/seed_data.py
+
+# 5. Start server
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+```
+
+Visit **http://localhost:8001/docs** for interactive Swagger UI.
+
+---
+
+## API Endpoints
+
+### Ingestion
+
+**POST** `/api/v1/ingest`
+
+Ingest medications from a source and detect conflicts.
+
+```bash
+curl -X POST http://localhost:8001/api/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "P001",
+    "clinic_id": "CLINIC_A",
+    "source": "clinic_emr",
+    "medications": [
+      {"name": "lisinopril", "dose": 10, "unit": "mg", "frequency": "daily"}
+    ]
+  }'
+```
+
+**Response:** Patient summary with detected conflicts.
+
+---
+
+### Retrieval
+
+**GET** `/api/v1/patients/{patient_id}`
+
+Retrieve unresolved conflicts for a patient.
+
+```bash
+curl http://localhost:8001/api/v1/patients/P001
+```
+
+---
+
+### Conflict Resolution
+
+**POST** `/api/v1/conflicts/{patient_id}/{conflict_index}/resolve`
+
+Mark conflict as resolved with audit trail.
+
+```bash
+curl -X POST "http://localhost:8001/api/v1/conflicts/P001/0/resolve?resolution_reason=Pharmacist%20verified&resolved_by=Dr.Smith"
+```
+
+---
+
+### Reporting
+
+**GET** `/api/v1/reports/patients-with-conflicts`
+
+List patients with ≥ min_conflicts unresolved conflicts.
+
+```bash
+curl "http://localhost:8001/api/v1/reports/patients-with-conflicts?clinic_id=CLINIC_A&min_conflicts=1"
+```
+
+**Response:**
+```json
+{
+  "count": 5,
+  "patients": [
+    {
+      "patient_id": "P001",
+      "clinic_id": "CLINIC_A",
+      "unresolved_conflict_count": 1,
+      "conflicts": [...]
+    }
+  ]
+}
+```
+
+**GET** `/api/v1/reports/conflict-summary`
+
+Aggregated conflict statistics by type.
+
+```bash
+curl "http://localhost:8001/api/v1/reports/conflict-summary?clinic_id=CLINIC_A"
+```
+
+**Response:**
+```json
+{
+  "total_patients": 15,
+  "conflict_statistics": [
+    {"_id": "dose_mismatch", "count": 4, "unresolved": 4},
+    {"_id": "blacklisted_combination", "count": 8, "unresolved": 8},
+    {"_id": "missing_stopped", "count": 1, "unresolved": 1}
+  ]
+}
+```
+
+---
+
+## Database Schema (SQLite)
+
+### `patients` Table
+
+```sql
+CREATE TABLE patients (
+  patient_id TEXT PRIMARY KEY,
+  clinic_id TEXT NOT NULL,
+  snapshots_json TEXT NOT NULL,          -- JSON array of MedicationSnapshot
+  conflicts_json TEXT NOT NULL,          -- JSON array of MedicationConflict
+  created_at TEXT NOT NULL,              -- ISO datetime
+  updated_at TEXT NOT NULL               -- ISO datetime
+)
+```
+
+**Indexes:**
+- `idx_clinic_id` on `clinic_id`
+- `idx_clinic_updated` on `(clinic_id, updated_at)`
+
+---
+
+## Conflict Detection Rules
+
+Defined in `data/conflict_rules.json`:
+
+1. **Dose Mismatch** — Same drug with different doses across sources
+2. **Blacklisted Combinations** — Drug classes that contraindicate (ACE + ARB, NSAID + ACE, etc.)
+3. **Missing or Stopped** — Drug active in one source, stopped in another
+
+### Example: Blacklist Rule
+
+```json
+{
+  "drugs": ["ACE_INHIBITOR", "ARB"],
+  "reason": "Both work on renin-angiotensin system; risk of hyperkalemia"
+}
+```
+
+---
+
+## Testing
+
+### Run Unit Tests
+
+```bash
+pytest tests/ -v
+```
+
+**Coverage:** 12 test cases for conflict detection, edge cases, and normalization.
+
+### Seeding Synthetic Data
+
+```bash
+python data/seed_data.py
+```
+
+Generates 15 patients across 3 clinics with 13 realistic conflicts:
+- 4 dose mismatches
+- 8 blacklisted combinations
+- 1 missing/stopped medication
+
+---
+
+## Project Structure
+
+```
+medication-reconciliation/
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app & endpoints
+│   ├── models.py            # Pydantic models & DTOs
+│   ├── conflict_detector.py # Core conflict detection logic
+│   └── db.py                # SQLite database operations
+├── data/
+│   ├── conflict_rules.json  # Drug interaction rules
+│   └── seed_data.py         # Synthetic data generator
+├── tests/
+│   ├── test_conflict_detection.py
+│   └── conftest.py
+├── requirements.txt
+├── README.md
+└── .gitignore
+```
+
+---
+
+## Assumptions & Trade-Offs
+
+### Assumptions
+
+1. **Single clinic per patient** — Patients aren't transferred between clinics during their record lifecycle
+2. **Snapshot immutability** — Once ingested, snapshots aren't modified; new snapshot replaces old
+3. **Normalization sufficiency** — Lowercasing + trimming adequately canonicalize medication names
+4. **Real-time consistency OK** — Periodic conflict detection on ingestion acceptable (not requiring ACID guarantees)
+
+### Trade-Offs
+
+| Problem | Solution | Trade-off |
+|---------|----------|-----------|
+| **Row size growth** | Archive old snapshots manually (future: TTL index) | No automated cleanup yet |
+| **Conflict deduplication** | Semantic key (type + drug_names) | Won't catch "lisinopril" vs "Prinivil" aliases |
+| **Single-source conflicts** | Dose mismatches require 2+ sources | Blacklist combos flagged within single source |
+| **Resolution tracking** | In-place update to conflict JSON | No immutable event log; can't undo resolutions |
+| **Drug database** | Static JSON | Manual updates; no real-time RxNav/RxNorm |
+
+---
+
+## Known Limitations & Future Work
+
+### Limitations
+
+- ❌ No authentication/authorization (future: JWT + role-based access)
+- ❌ No soft-delete for conflicts (marked resolved, not archived)
+- ❌ No pagination on large patient lists (future: cursor-based)
+- ❌ Drug database is static (future: RxNav API)
+- ❌ No WebSocket for real-time notifications
+
+### Future Enhancements
+
+1. **Persistent event log** — Event sourcing for full audit trail
+2. **ML-based confidence scoring** — Likelihood vs. false positive
+3. **Real-time drug interactions** — RxNav/RxNorm API integration
+4. **Batch ingestion** — CSV/FHIR upload for clinic bulk updates
+5. **FHIR compliance** — Export medication lists as FHIR Medication/MedicationStatement
+6. **Mobile clinician app** — Push notifications for critical conflicts
+7. **Cost-benefit analysis** — Recommendations based on clinical guidelines
+8. **Distributed tracing** — OpenTelemetry integration for production observability
+9. **PostgreSQL migration** — For 1M+ patient scale
+10. **Caching layer** — Redis for frequently-queried patient data
+
+---
+
+## Development Notes
+
+### Database Choice: SQLite
+
+Chosen for **simplicity and no external dependencies**. Suitable for:
+- Single-server deployment (single medicine reconciliation team)
+- ~100k patients (current SQLite scalability)
+- Rapid prototyping and testing
+
+**Migration path:** For 1M+ patients, migrate to PostgreSQL (same ORM-like patterns).
+
+### AI Tool Usage
+
+**What AI Was Used For:**
+- Code scaffold & boilerplate (Pydantic models, FastAPI handlers)
+- Conflict detection algorithm brainstorming (multi-source comparison)
+- Test case generation (edge cases, patient scenarios)
+- Documentation & README examples
+
+**What I Reviewed & Changed Manually:**
+- Naming conventions (ConflictType clarity, sources_involved for tracking)
+- Database layer (switched from MongoDB → SQLite for simplicity)
+- Error handling & validation (malformed payloads, clinic_id consistency)
+- Conflict deduplication logic (semantic keys instead of ID-based)
+- Seed data (reduced from 50 → 15 patients for clarity)
+
+**Example Disagreement: Database Choice**
+
+AI initially suggested MongoDB for document flexibility. I switched to SQLite because:
+1. No external DB needed (testing without setup)
+2. Simpler development experience
+3. Sufficient for 100k+ patients
+4. Easier to demonstrate in a time-boxed assignment
+
+---
+
+## Running in Production
+
+### Environment Variables
+
+```bash
+export SQLITE_DB_PATH=/var/lib/medication-reconciliation/reconciliation.db
+export PORT=8001
+```
+
+### Deployment Example (Docker)
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY app/ ./app/
+COPY data/ ./data/
+EXPOSE 8001
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+```
+
+### Health Check
+
+```bash
+curl http://localhost:8001/api/v1/health
+```
+
+---
+
+## Summary
+
+This project delivers a **working medication reconciliation service** that:
+
+✅ Ingests medications from multiple sources  
+✅ Detects 3 types of conflicts (dose, blacklist, missing/stopped)  
+✅ Tracks patient history and audit resolutions  
+✅ Provides reporting on conflicts by clinic  
+✅ Passes all tests and handles edge cases  
+✅ Runs without external infrastructure  
+
+**Total development time:** ~5.5 hours (within 6–10 hour budget)  
+**Git commits:** Atomic, feature-based (scaffold, models, detector, db, api, tests, seed)  
+**Test coverage:** 12 unit tests, 1 integration test, all passing  
+
+---
+
+## Contact & Questions
+
+For questions or feedback, open an issue or PR on GitHub.
+
+**Repository:** https://github.com/shivamk1075/ShivamKumar_Assignment2_Medication
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

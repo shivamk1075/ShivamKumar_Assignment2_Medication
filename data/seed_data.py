@@ -2,6 +2,10 @@
 Synthetic data seed script for testing and demonstration.
 Generates 15 patients with varied medication lists and conflicts.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import json
 from datetime import datetime, timedelta
 from app.models import (
