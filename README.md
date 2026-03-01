@@ -8,15 +8,7 @@ The goal of this assignment was to demonstrate clear system design, readable cod
 
 ---
 
-## Time Spent
-
-Approximately 6–10 hours (time-boxed as instructed).
-
-Some parts are intentionally simple to stay within the assignment scope.
-
----
-
-## Quick Setup (Run in under 5 minutes)
+## Quick Setup
 
 ### Requirements
 - Python 3.9+
@@ -40,13 +32,13 @@ pip install -r requirements.txt
 pytest tests/ -v
 
 # Start server
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Open:
 
 ```
-http://localhost:8001/docs
+http://localhost:8000/docs
 ```
 
 to view API documentation.
