@@ -8,14 +8,14 @@ The goal of this assignment was to demonstrate clear system design, readable cod
 
 ---
 
-## Assumptions (Defined Before Implementation)
+## Assumptions
 
 Before starting implementation, I made the following assumptions to keep scope manageable:
 
 - Each patient belongs to a single clinic.
 - Medication names are compared using simple normalization (lowercase string matching).
 - Snapshots are append-only and not modified after creation.
-- Dataset size is small (assignment scale).
+- Dataset size is small.
 - No concurrent write handling is required.
 - Conflict detection runs during ingestion rather than asynchronously.
 
@@ -209,6 +209,3 @@ The implementation is complete and working — only the recording is pending.
 
 ---
 
-## Final Notes
-
-The focus of this submission was to demonstrate clear thinking, practical system design, and maintainable code within a limited time window. The implementation prioritizes clarity and reasoning over feature completeness.
