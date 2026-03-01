@@ -1,0 +1,30 @@
+{
+  "drug_classes": {
+    "ACE_INHIBITOR": ["lisinopril", "enalapril", "ramipril"],
+    "ARB": ["losartan", "valsartan", "irbesartan"],
+    "NSAID": ["ibuprofen", "naproxen", "indomethacin"],
+    "BETA_BLOCKER": ["metoprolol", "atenolol", "propranolol"],
+    "CALCIUM_CHANNEL_BLOCKER": ["amlodipine", "diltiazem", "verapamil"]
+  },
+  "blacklisted_combinations": [
+    {
+      "drugs": ["ACE_INHIBITOR", "ARB"],
+      "reason": "Both work on renin-angiotensin system; risk of hyperkalemia"
+    },
+    {
+      "drugs": ["NSAID", "ACE_INHIBITOR"],
+      "reason": "Increased risk of renal dysfunction in dialysis patients"
+    },
+    {
+      "drugs": ["NSAID", "ARB"],
+      "reason": "Increased risk of renal dysfunction and hyperkalemia"
+    }
+  ],
+  "dose_ranges": {
+    "lisinopril": {"min": 2.5, "max": 40, "unit": "mg"},
+    "metoprolol": {"min": 50, "max": 400, "unit": "mg"},
+    "amlodipine": {"min": 2.5, "max": 10, "unit": "mg"},
+    "losartan": {"min": 25, "max": 100, "unit": "mg"},
+    "ibuprofen": {"min": 200, "max": 800, "unit": "mg"}
+  }
+}
